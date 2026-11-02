@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Salus Tereré - Tradicional 3D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+  /* Layout: una sola escena a pantalla completa con el paquete y un botón de giro */
+  :root {
+    --bg-1: #ffffff; --bg-2: #dfe7d8; --fg: #17251b; --surface: rgba(255,255,255,0.92); --line: #d4dccd; --accent: #2c6b47;
+    --font-body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg-1: #24342b; --bg-2: #0f1612; --fg: #e5eee6; --surface: rgba(22,32,25,0.92); --line: #2b3a30; --accent: #5cc08a; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg-1: #24342b; --bg-2: #0f1612; --fg: #e5eee6; --surface: rgba(22,32,25,0.92); --line: #2b3a30; --accent: #5cc08a; color-scheme: dark; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--fg); font-family: var(--font-body);
+    background: radial-gradient(110% 85% at 50% 35%, var(--bg-1), var(--bg-2)); background-color: var(--bg-2);
+    padding-left: max(0px, env(safe-area-inset-left, 0px)); padding-right: max(0px, env(safe-area-inset-right, 0px));
+  }
+  .stage { position: relative; height: 100%; min-height: 360px; touch-action: none; }
+  .stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  .stage canvas:active { cursor: grabbing; }
+  #spin {
+    position: absolute;
+    top: calc(16px + env(safe-area-inset-top, 0px));
+    right: calc(16px + env(safe-area-inset-right, 0px));
+    font: 600 15px var(--font-body); color: var(--fg); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 999px; padding: 9px 20px; cursor: pointer;
+  }
+  #spin:hover { border-color: var(--accent); }
+  #spin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <button id="spin" type="button" aria-pressed="true">Detener giro</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function () {
+  var stage = document.getElementById('stage');
+  if (!window.THREE || !THREE.OrbitControls) return;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+  function rr(a, b) { return a + (b - a) * rnd(); }
+
+  // Identidad visual oficial de Salus (Molinos)
+  var GREEN = '#1a4331', GREEN_D = '#122e21', YELLOW = '#f4c430', SUN_ORANGE = '#f39c12', CREAM = '#f6f1e2', INK = '#17251b';
+  var DISPLAY = '"Baloo 2", "Trebuchet MS", sans-serif', BODY = '"Figtree", "Segoe UI", sans-serif';
+  var FLAKES = ['#4a7238', '#588344', '#3d612e', '#669451', '#325024'];
+
+  function canvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+  function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  function wrap(ctx, text, x, y, maxW, lh) {
+    var words = text.split(' '), line = '';
+    for (var i = 0; i < words.length; i++) {
+      var t = line ? line + ' ' + words[i] : words[i];
+      if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y); line = words[i]; y += lh; } else line = t;
+    }
+    if (line) { ctx.fillText(line, x, y); y += lh; }
+    return y;
+  }
+  function leaf2d(ctx, x, y, len, wid, ang, color) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.fillStyle = color; ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.quadraticCurveTo(len * 0.45, -wid, len, 0); ctx.quadraticCurveTo(len * 0.45, wid, 0, 0); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = Math.max(1, wid * 0.12); ctx.beginPath(); ctx.moveTo(len * 0.08, 0); ctx.lineTo(len * 0.9, 0); ctx.stroke();
+    ctx.restore();
+  }
+  
+  // Dibujo del sol naciente característico de la marca Salus arriba del logo
+  function drawSun(ctx, cx, cy) {
+    ctx.save();
+    ctx.fillStyle = YELLOW;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 140, Math.PI, 0, false);
+    ctx.fill();
+    // Detalles internos del sol / ondas al estilo Salus
+    ctx.strokeStyle = SUN_ORANGE;
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 105, Math.PI, 0, false);
+    ctx.stroke();
+    // Pequeña hoja superior en el sol
+    ctx.fillStyle = '#4a853b';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - 145, 22, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Macro de la mezcla: yerba gruesa canchada, palos y hierbas
+  function mix(ctx, cx, cy, r, n) {
+    ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = '#273f1d'; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    var i;
+    for (i = 0; i < n; i++) {
+      var a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * r, x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(rnd() * Math.PI);
+      ctx.fillStyle = FLAKES[Math.floor(rnd() * FLAKES.length)];
+      var w = rr(12, 28) * r / 320, h = rr(7, 18) * r / 320;
+      ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(w / 2, -h / 3); ctx.lineTo(w / 2.3, h / 2); ctx.lineTo(-w / 2.2, h / 2.4); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.lineCap = 'round';
+    for (i = 0; i < n * 0.15; i++) {
+      var x2 = cx + rr(-r, r), y2 = cy + rr(-r, r), ang = rnd() * Math.PI, L = rr(20, 52) * r / 320;
+      ctx.strokeStyle = rnd() > 0.5 ? '#d2bc8d' : '#bfa979'; ctx.lineWidth = rr(3.5, 6) * r / 320;
+      ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x2 + Math.cos(ang) * L, y2 + Math.sin(ang) * L); ctx.stroke();
+    }
+    for (i = 0; i < n * 0.02; i++) {
+      leaf2d(ctx, cx + rr(-r * 0.8, r * 0.8), cy + rr(-r * 0.8, r * 0.8), rr(45, 75) * r / 320, rr(9, 15) * r / 320, rnd() * 6, '#558f3f');
+    }
+    var g = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.35, r * 0.1, cx, cy, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.12)'); g.addColorStop(1, 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    ctx.restore();
+  }
+
+  function drawFront() {
+    var W = 1000, H = 2000, c = canvas(W, H), ctx = c.getContext('2d');
+    
+    // Fondo blanco tradicional inmaculado de Salus
+    ctx.fillStyle = '#ffffff'; 
+    ctx.fillRect(0, 0, W, H);
+
+    // Franja de la selva misionera ilustrada en la parte inferior (estilo arte tradicional Salus)
+    ctx.fillStyle = GREEN;
+    ctx.fillRect(0, 1320, W, 680);
+    
+    // Palmeras y vegetación de fondo en la franja inferior
+    for (var i = 0; i < 18; i++) {
+      var px = i * 60 + rr(-15, 15);
+      ctx.fillStyle = '#122e21';
+      ctx.fillRect(px + 20, 1380, 16, 250);
+      ctx.fillStyle = '#214d37';
+      ctx.beginPath(); ctx.arc(px + 28, 1380, 50, 0, Math.PI * 2); ctx.fill();
+    }
+    
+    // Sol naciente y logo oficial SALUS
+    drawSun(ctx, W / 2, 230);
+
+    // Tipografía del logotipo SALUS (característica y arqueada/robusta)
+    ctx.fillStyle = GREEN; 
+    ctx.textAlign = 'center'; 
+    ctx.font = '800 175px ' + DISPLAY; 
+    ctx.fillText('SALUS', W / 2, 350);
+
+    // Pequeña hoja decorativa integrada en la letra 'U' de Salus
+    ctx.fillStyle = '#558f3f';
+    ctx.beginPath();
+    ctx.ellipse(W / 2 + 105, 275, 18, 10, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Slogan tradicional debajo del logo
+    ctx.font = '700 36px ' + BODY; 
+    ctx.fillStyle = '#2f5e46';
+    ctx.fillText('Suave, Rica y Natural', W / 2, 410);
+
+    // Línea separadora elegante
+    ctx.strokeStyle = '#d0dec9';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(250, 445); ctx.lineTo(750, 445); ctx.stroke();
+
+    // Denominación del producto para Tereré
+    ctx.fillStyle = GREEN;
+    ctx.font = '800 68px ' + DISPLAY;
+    ctx.fillText('TERERÉ', W / 2, 530);
+
+    ctx.font = '600 38px ' + BODY;
+    ctx.fillStyle = '#334e3f';
+    ctx.fillText('Yerba mate compuesta · Molienda gruesa', W / 2, 590);
+
+    // Ventana circular con la mezcla real de yerba canchada y hierbas
+    mix(ctx, W / 2, 920, 260, 2200);
+    ctx.strokeStyle = YELLOW; ctx.lineWidth = 14; ctx.beginPath(); ctx.arc(W / 2, 920, 268, 0, Math.PI * 2); ctx.stroke();
+    
+    // Ilustración del Tucán y Yaguareté característicos de la marca sobre la selva
+    // (Silueta / representación artística limpia integrada en el empaque)
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath(); ctx.arc(780, 1420, 90, 0, Math.PI * 2); ctx.fill(); // Sol atardecer en la selva
+    
+    // Variedad y componentes
+    rrect(ctx, 150, 1220, 700, 75, 36); 
+    ctx.fillStyle = 'rgba(26, 67, 49, 0.85)'; 
+    ctx.fill();
+    
+    ctx.fillStyle = '#ffffff'; 
+    ctx.font = '700 32px ' + BODY; 
+    ctx.fillText('Con poleo, cedrón, stevia y limón', W / 2, 1270);
+
+    // Sellos institucionales sobre el fondo verde de la selva
+    var badges = ['HECHA PARA TERERÉ', 'SIN AZÚCARES AGREGADOS'];
+    ctx.font = '600 28px ' + BODY;
+    var ws = badges.map(function (b) { return ctx.measureText(b).width + 44; });
+    var x = (W - (ws[0] + ws[1] + 20)) / 2;
+    badges.forEach(function (b, k) {
+      rrect(ctx, x, 1520, ws[k], 60, 30); 
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.fillText(b, x + ws[k] / 2, 1560); x += ws[k] + 20;
+    });
+
+    // Peso neto tradicional
+    ctx.textAlign = 'left'; ctx.font = '800 84px ' + DISPLAY; ctx.fillStyle = '#ffffff'; ctx.fillText('500 g', 80, 1750);
+    ctx.textAlign = 'right'; ctx.font = '500 28px ' + BODY; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('Industria Argentina', W - 80, 1720); 
+    ctx.fillText('Molinos Río de la Plata', W - 80, 1765);
+    
+    return c;
+  }
+
+  function drawBack() {
+    var W = 1000, H = 2000, c = canvas(W, H), ctx = c.getContext('2d');
+    ctx.fillStyle = CREAM; ctx.fillRect(0, 0, W, H);
+    
+    ctx.fillStyle = GREEN; ctx.fillRect(0, 0, W, 210);
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.font = '800 76px ' + DISPLAY; ctx.fillText('Cómo preparar tu tereré', W / 2, 135);
+    
+    var steps = [
+      'Llená la guampa o vaso hasta la mitad con Yerba Salus Tereré.',
+      'Inclinala suavemente dejando un espacio para ubicar la bombilla.',
+      'Agregá agua bien fría o con abundante hielo. Su molienda gruesa evita que se tape.',
+      'Disfrutá de un sabor fresco, natural y duradero en compañía.'
+    ];
+    var y = 330; ctx.textAlign = 'left';
+    steps.forEach(function (s, k) {
+      ctx.fillStyle = GREEN; ctx.beginPath(); ctx.arc(120, y - 18, 42, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = YELLOW; ctx.font = '800 54px ' + DISPLAY; ctx.textAlign = 'center'; ctx.fillText(String(k + 1), 120, y);
+      ctx.textAlign = 'left'; ctx.fillStyle = INK; ctx.font = '500 38px ' + BODY;
+      y = wrap(ctx, s, 195, y - 4, 730, 50) + 40;
+    });
+
+    ctx.fillStyle = GREEN; ctx.font = '800 48px ' + DISPLAY; ctx.fillText('Ingredientes', 70, y + 20);
+    ctx.fillStyle = INK; ctx.font = '400 34px ' + BODY;
+    y = wrap(ctx, 'Yerba mate elaborada con palo, poleo, hojas de stevia, cedrón, cáscara de limón deshidratada, aromatizante/saborizante natural.', 70, y + 75, 860, 46);
+    
+    ctx.font = '600 32px ' + BODY; ctx.fillStyle = GREEN;
+    y = wrap(ctx, 'Molienda canchada especial: mayor proporción de palo y menor presencia de polvo para una óptima infusión en frío.', 70, y + 20, 860, 44);
+
+    // Tabla nutricional
+    rrect(ctx, 70, y + 20, 520, 340, 18); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = INK; ctx.font = '700 32px ' + BODY; ctx.fillText('Información nutricional', 96, y + 72);
+    ctx.font = '400 28px ' + BODY;
+    ['Porción: 50g (1 mate)', 'Valor energético: 85 kcal', 'Carbohidratos: 15g', 'Proteínas: 2.1g', 'Sodio: 0mg'].forEach(function (t, k) {
+      ctx.fillText(t, 96, y + 130 + k * 44);
+      ctx.strokeStyle = 'rgba(23,37,27,0.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(96, y + 142 + k * 44); ctx.lineTo(566, y + 142 + k * 44); ctx.stroke();
+    });
+
+    // Código de barras ilustrativo
+    var bx = 640, by = y + 50; ctx.fillStyle = '#ffffff'; ctx.fillRect(bx - 16, by - 16, 312, 240);
+    ctx.fillStyle = INK; var cx = bx;
+    while (cx < bx + 280) { var bw = rnd() > 0.6 ? 6 : 3; ctx.fillRect(cx, by, bw, 170); cx += bw + (rnd() > 0.5 ? 4 : 7); }
+    ctx.font = '500 24px ' + BODY; ctx.textAlign = 'center'; ctx.fillText('7 790360 012458', bx + 140, by + 208);
+
+    ctx.textAlign = 'center'; ctx.fillStyle = '#5a675a'; ctx.font = '500 26px ' + BODY;
+    ctx.fillText('Molinos Río de la Plata S.A. · Establecimiento N° [completar]', W / 2, 1880);
+    ctx.fillText('Trabajo Final Integrador · Lic. en Marketing UNaM', W / 2, 1925);
+    return c;
+  }
+
+  function drawSide(text, sub) {
+    var W = 572, H = 2000, c = canvas(W, H), ctx = c.getContext('2d');
+    ctx.fillStyle = GREEN; ctx.fillRect(0, 0, W, H);
+    
+    // Banda superior institucional
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, 220);
+    ctx.fillStyle = GREEN; ctx.textAlign = 'center'; ctx.font = '800 80px ' + DISPLAY; ctx.fillText('SALUS', W / 2, 130);
+    ctx.font = '600 24px ' + BODY; ctx.fillText('SUAVE, RICA Y NATURAL', W / 2, 175);
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(W / 2, 220); ctx.lineTo(W / 2, H); ctx.stroke();
+    
+    ctx.save(); ctx.translate(W / 2 - 60, 1150); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.font = '800 130px ' + DISPLAY; ctx.fillText(text, 0, 0);
+    ctx.restore();
+    
+    ctx.save(); ctx.translate(W / 2 + 100, 1150); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.textAlign = 'center'; ctx.font = '600 46px ' + BODY; ctx.fillText(sub, 0, 0);
+    ctx.restore();
+    
+    return c;
+  }
+
+  function drawCrimp(base) {
+    var c = canvas(512, 128), ctx = c.getContext('2d');
+    ctx.fillStyle = base; ctx.fillRect(0, 0, 512, 128);
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 3;
+    for (var x = 6; x < 512; x += 12) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 128); ctx.stroke(); }
+    return c;
+  }
+  function plain(color) { var c = canvas(32, 32), ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 32, 32); return c; }
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+  renderer.domElement.setAttribute('role', 'img');
+  renderer.domElement.setAttribute('aria-label', 'Paquete tradicional de Yerba Salus Tereré en 3D');
+
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08; controls.enablePan = false;
+  controls.minDistance = 10; controls.maxDistance = 40;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xc8d4c2, 0.8));
+  var key = new THREE.DirectionalLight(0xffffff, 0.75);
+  key.position.set(7, 14, 10); key.castShadow = true; key.shadow.mapSize.set(1024, 1024);
+  var sc = key.shadow.camera; sc.left = -9; sc.right = 9; sc.top = 9; sc.bottom = -9;
+  scene.add(key);
+  var rim = new THREE.DirectionalLight(0xffffff, 0.3); rim.position.set(-9, 5, -11); scene.add(rim);
+
+  var PW = 5.2, PH = 10.5, PD = 3.0;
+  var maxAniso = renderer.capabilities.getMaxAnisotropy();
+  function tex(c) { var t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = maxAniso; return t; }
+
+  var pg = new THREE.BoxGeometry(PW, PH, PD, 24, 40, 12), pp = pg.attributes.position;
+  for (var i = 0; i < pp.count; i++) {
+    var x = pp.getX(i), y = pp.getY(i), z = pp.getZ(i);
+    var fx = 1 - Math.pow(x / (PW / 2), 2), fy = 1 - Math.pow(y / (PH / 2), 4), fz = 1 - Math.pow(z / (PD / 2), 2);
+    if (Math.abs(Math.abs(z) - PD / 2) < 1e-4) pp.setZ(i, z + Math.sign(z) * 0.16 * fx * fy);
+    if (Math.abs(Math.abs(x) - PW / 2) < 1e-4) pp.setX(i, x + Math.sign(x) * 0.07 * fz * fy);
+  }
+  pg.computeVertexNormals();
+  function mat(map) { return new THREE.MeshStandardMaterial({ map: map, roughness: 0.72, metalness: 0.02 }); }
+  var packMats = [mat(null), mat(null), mat(tex(plain(GREEN))), mat(tex(plain(GREEN_D))), mat(null), mat(null)];
+  var group = new THREE.Group(); scene.add(group);
+  var pack = new THREE.Mesh(pg, packMats); pack.castShadow = true; group.add(pack);
+  var fin = new THREE.Mesh(new THREE.BoxGeometry(PW * 0.98, 0.42, 0.16), new THREE.MeshStandardMaterial({ map: tex(drawCrimp(GREEN)), roughness: 0.7 }));
+  fin.position.y = PH / 2 + 0.21; fin.castShadow = true; group.add(fin);
+  group.position.y = -0.2;
+
+  var ground = new THREE.Mesh(new THREE.CircleGeometry(10, 48), new THREE.ShadowMaterial({ opacity: 0.17 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -PH / 2 - 0.21; ground.receiveShadow = true; scene.add(ground);
+
+  camera.position.set(9, 3.5, 17); controls.target.set(0, 0.2, 0);
+
+  var spinBtn = document.getElementById('spin');
+  function setSpin(on) {
+    controls.autoRotate = on; controls.autoRotateSpeed = 1.6;
+    spinBtn.setAttribute('aria-pressed', String(on)); spinBtn.textContent = on ? 'Detener giro' : 'Girar';
+  }
+  setSpin(!reduce);
+  spinBtn.onclick = function () { setSpin(!controls.autoRotate); };
+
+  function resize() {
+    var w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h);
+    camera.fov = camera.aspect < 0.8 ? 42 : 30; camera.updateProjectionMatrix();
+  }
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(stage); else window.addEventListener('resize', resize);
+  resize();
+
+  function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
+
+  var fontsReady = (document.fonts && document.fonts.load)
+    ? Promise.all(['800 100px "Baloo 2"', '600 40px "Figtree"', '500 40px "Figtree"', '400 40px "Figtree"', '700 40px "Figtree"'].map(function (f) { return document.fonts.load(f); }))
+    : Promise.resolve();
+  Promise.race([fontsReady, new Promise(function (r) { setTimeout(r, 2500); })]).catch(function () {}).then(function () {
+    seed = 11;
+    var maps = [tex(drawSide('TERERÉ', 'Molienda gruesa · 500 g')), tex(drawSide('SALUS', 'Tradición litoraleña')), null, null, tex(drawFront()), tex(drawBack())];
+    [0, 1, 4, 5].forEach(function (k) { packMats[k].map = maps[k]; packMats[k].needsUpdate = true; });
+    requestAnimationFrame(loop);
+  });
+})();
+</script>
+</body>
+</html>
